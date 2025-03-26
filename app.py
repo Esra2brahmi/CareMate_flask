@@ -1,6 +1,8 @@
-from flask import Flask, request, jsonify, url_for
+from flask import Flask, request, jsonify, send_from_directory, url_for
 from flask_pymongo import PyMongo
 from flask_cors import CORS
+import os
+from flask_pymongo import PyMongo
 from config import Config
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
@@ -8,6 +10,17 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 
 app = Flask(__name__)
 app.config.from_object(Config)
+
+# Configure the upload folder
+app.config['UPLOAD_FOLDER'] = 'uploads/'  # Directory to store uploaded files
+# Ensure upload folder exists
+if not os.path.exists(app.config['UPLOAD_FOLDER']):
+    os.makedirs(app.config['UPLOAD_FOLDER'])
+
+# Enable Cross-Origin Resource Sharing (CORS)
+CORS(app)
+
+
 @app.route('/')
 def index():
     return jsonify({'message': 'Welcome to the Flask API'})
@@ -21,8 +34,7 @@ app.config.update(
     MAIL_PASSWORD='cppsczwrdrvaphmx'      # Replace with your email password
 )
 mail = Mail(app)
-# Enable Cross-Origin Resource Sharing (CORS)
-CORS(app)
+
 
 # Initialize PyMongo with the Flask app
 mongo = PyMongo(app)
@@ -171,5 +183,58 @@ def reset_with_token(token):
     }), 200
 
 
+# ---------------------------
+# Endpoint: file upload
+# ---------------------------
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'file' not in request.files:
+        return jsonify({'success': False, 'message': 'No file part'}), 400
+
+    file = request.files['file']
+    
+    if file.filename == '':
+        return jsonify({'success': False, 'message': 'No selected file'}), 400
+
+    file_path = os.path.join(app.config['UPLOAD_FOLDER'], file.filename)
+    
+    try:
+        file.save(file_path)
+        return jsonify({'success': True, 'message': 'Upload and move success'}), 200
+    except Exception as e:
+        return jsonify({'success': False, 'message': f'Error uploading file: {str(e)}'}), 500
+
+
+# ---------------------------
+# Endpoint: get file upload
+# ---------------------------
+@app.route('/uploads/<filename>')
+def get_uploaded_file(filename):
+    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
+
+
+# ---------------------------
+# Endpoint: list uploaded files
+# ---------------------------
+
+@app.route('/uploads/list', methods=['GET'])
+def list_uploaded_files():
+    files = os.listdir(app.config['UPLOAD_FOLDER'])
+    return {"images": files}
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# ---------------------------
 if __name__ == '__main__':
     app.run(debug=True)
