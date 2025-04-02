@@ -6,5 +6,5 @@ basedir = os.path.abspath(os.path.dirname(__file__))
 load_dotenv(os.path.join(basedir, '.env'))
 
 class Config:
-    SECRET_KEY = os.environ.get('SECRET_KEY', 'default-secret-key')
-    MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/Users')
+    SECRET_KEY = os.environ.get('SECRET_KEY', 'paradice')
+    MONGO_URI = os.environ.get('MONGO_URI', 'mongodb+srv://rawia-ghrairi2:Rgh%402020@cluster0.g1ja8.mongodb.net/users')

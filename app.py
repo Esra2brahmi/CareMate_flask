@@ -7,6 +7,7 @@ from config import Config
 from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
+from bson.objectid import ObjectId
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -30,8 +31,8 @@ app.config.update(
     MAIL_SERVER='smtp.gmail.com',      # Replace with your mail server
     MAIL_PORT=587,                       # Replace with your mail server port
     MAIL_USE_TLS=True,
-    MAIL_USERNAME='esrabrahmii@gmail.com',  # Replace with your email
-    MAIL_PASSWORD='cppsczwrdrvaphmx'      # Replace with your email password
+    MAIL_USERNAME='rawiaghrairi@gmail.com',  # Replace with your email
+    MAIL_PASSWORD='Rgh@2020'      # Replace with your email password
 )
 mail = Mail(app)
 
@@ -223,18 +224,116 @@ def list_uploaded_files():
     return {"images": files}
 
 
-
-
-
-
-
-
-
-
-
-
-
-
 # ---------------------------
+# Endpoint: Book Appointment
+# ---------------------------
+@app.route('/book-appointment', methods=['POST'])
+def book_appointment():
+    data = request.get_json(silent=True) or request.form
+    name = data.get('name')
+    age = data.get('age')
+    address = data.get('address')
+    gender = data.get('gender')
+    photo=data.get('photo')
+    phone = data.get('phone')
+    email = data.get('email')
+    date_rdv = data.get('date_rdv')  # Date du rendez-vous
+     # verify data
+    if not all([name, age, address, gender,photo, phone, email, date_rdv]):
+        return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
+    # verify if patient exists 
+    if db.appointments.find_one({'email': email}):
+        return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
+    # insert patients in the DB
+    patient_id = db.appointments.insert_one({  
+    'name': name,  
+    'age': age,  
+    'address': address,  
+    'gender': gender,  
+    'photo':photo,
+    'phone': phone,  
+    'email': email,  
+    'date_rdv': date_rdv,
+    'isAccept': False
+    }).inserted_id 
+    return jsonify({
+        'status': 'success',
+        'message': 'Appointment booked successfully',
+        'patient_id': str(patient_id)
+    }), 201
+
+# ---------------------------------
+# Endpoint: Get  Appointment Requests
+# ---------------------------------
+@app.route('/appointments', methods=['GET'])
+def getAppointmentsRequest():
+    appointments = list(db.appointments.find({"isAccept": False}, {"_id": 0}))  # Exclure _id pour éviter les erreurs de sérialisation
+    return jsonify(appointments), 200
+
+
+# ---------------------------------
+# Endpoint: Get accepted Appointment (patientList)
+# ---------------------------------
+@app.route('/appointments/accepted', methods=['GET'])
+def get_accepted_appointments():
+    accepted_appointments = list(db.appointments.find({"isAccept": True}, {"_id": 0}))
+    return jsonify(accepted_appointments), 200
+
+# ---------------------------------
+# Endpoint: Accept Appointment
+# ---------------------------------
+@app.route('/accept-appointment-by-email/<email>', methods=['PUT'])
+def accept_appointment_by_email(email):
+    result = db.appointments.update_one(
+        {"email": email},  # find appointment with  email
+        {"$set": {"isAccept": True}}  # Update isAccept to True
+    )
+    if result.matched_count == 0:
+        return jsonify({'status': 'fail', 'message': 'Appointment not found'}), 404
+    
+    return jsonify({'status': 'success', 'message': 'Appointment accepted'}), 200
+
+# ---------------------------------
+# Endpoint: Delete Appointment
+# ---------------------------------
+@app.route('/delete-appointment-by-email/<email>', methods=['DELETE'])
+def delete_appointment_by_email(email):
+    result = db.appointments.delete_one({"email": email})
+    # Vérifier si un document a été supprimé
+    if result.deleted_count > 0:
+        return jsonify({"message": "Appointment deleted successfully"}), 200
+    else:
+        return jsonify({"error": "Appointment not found"}), 404
+
+# ---------------------------------
+# Endpoint: Reschedule Appointment
+# ---------------------------------
+@app.route('/reschedule-appointment-by-email', methods=['PUT'])
+def reschedule_appointment():
+    data = request.json
+    email = data.get("email")
+    new_date = data.get("date_rdv")
+    if not email or not new_date :
+        return jsonify({"message": "Please provide a new date"}), 400
+
+    # Mettre à jour la date de rendez-vous dans la base de données
+    result = mongo.db.appointments.update_one(
+        {"email": email},
+        {"$set": {"date_rdv": new_date}}
+    )
+    if result.modified_count > 0:
+        return jsonify({"message": "Appointment rescheduled successfully"}), 200
+    else:
+        return jsonify({"message": "No changes made or patient not found"}), 404
+
+
+
+
+
+
+
+
+
+
 if __name__ == '__main__':
     app.run(debug=True)
