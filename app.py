@@ -31,8 +31,8 @@ app.config.update(
     MAIL_SERVER='smtp.gmail.com',      # Replace with your mail server
     MAIL_PORT=587,                       # Replace with your mail server port
     MAIL_USE_TLS=True,
-    MAIL_USERNAME='rawiaghrairi@gmail.com',  # Replace with your email
-    MAIL_PASSWORD='Rgh@2020'      # Replace with your email password
+    MAIL_USERNAME='esrabrahmii@gmail.com',  # Replace with your email
+    MAIL_PASSWORD='cppsczwrdrvaphmx'      # Replace with your email password
 )
 mail = Mail(app)
 
@@ -327,8 +327,55 @@ def reschedule_appointment():
         return jsonify({"message": "No changes made or patient not found"}), 404
 
 
+# ---------------------------------
+# Endpoint: create doctor
+# ---------------------------------
+
+@app.route('/doctors', methods=['POST'])
+def add_doctor():
+    name = request.form.get('name')
+    email = request.form.get('email')
+    speciality = request.form.get('speciality')
+    description = request.form.get('description')
+    location = request.form.get('location')
+    image = request.files.get('image')
+
+    if not all([name, email, speciality, description, location]):
+        return jsonify({'status': 'fail', 'message': 'All fields are required'}), 400
+
+    image_url = ''
+    if image:
+        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+        image.save(image_path)
+        image_url = url_for('get_uploaded_file', filename=image_filename, _external=True)
+
+    doctor_id = db.doctors.insert_one({
+        'name': name,
+        'email': email,
+        'speciality': speciality,
+        'description': description,
+        'location': location,
+        'image_url': image_url
+    }).inserted_id
+
+    return jsonify({'status': 'success', 'doctor_id': str(doctor_id)}), 201
 
 
+
+
+
+# ---------------------------------
+# Endpoint: get doctors
+# ---------------------------------
+
+
+@app.route('/doctors', methods=['GET'])
+def get_doctors():
+    doctors = list(db.doctors.find())
+    for doc in doctors:
+        doc['_id'] = str(doc['_id'])  # Convert ObjectId to string
+    return jsonify(doctors), 200
 
 
 
