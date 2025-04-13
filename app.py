@@ -54,9 +54,10 @@ def register():
     name = data.get('name')
     email = data.get('email')
     password = data.get('password')
+    role=data.get('role')
 
     # Validate input
-    if not name or not email or not password:
+    if not name or not email or not password or not role:
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
 
     # Check if the user already exists in the database
@@ -70,7 +71,8 @@ def register():
     user_id = db.users.insert_one({
         'name': name,
         'email': email,
-        'password': hashed_password
+        'password': hashed_password,
+        'role':role
     }).inserted_id
 
     return jsonify({
@@ -88,9 +90,10 @@ def login():
     data = request.get_json(silent=True) or request.form
     email = data.get('email')
     password = data.get('password')
+    role = data.get('role')
 
     # Validate input
-    if not email or not password:
+    if not email or not password or not role:
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
 
     # Find the user by email
@@ -100,7 +103,7 @@ def login():
         return jsonify({
             'status': 'success',
             'message': 'Logged in successfully',
-            'user': {'name': user['name'], 'email': user['email']}
+            'user': {'_id': str(user['_id']),'name': user['name'], 'email': user['email'],'role': user['role']}
         }), 200
     else:
         return jsonify({'status': 'fail', 'message': 'Invalid credentials'}), 401
@@ -238,8 +241,9 @@ def book_appointment():
     phone = data.get('phone')
     email = data.get('email')
     date_rdv = data.get('date_rdv')  # Date du rendez-vous
+    doctor_id = data.get('doctor_id')
      # verify data
-    if not all([name, age, address, gender,photo, phone, email, date_rdv]):
+    if not all([name, age, address, gender,photo, phone, email, date_rdv,doctor_id]):
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
     # verify if patient exists 
     if db.appointments.find_one({'email': email}):
@@ -254,7 +258,9 @@ def book_appointment():
     'phone': phone,  
     'email': email,  
     'date_rdv': date_rdv,
+    'doctor_id':doctor_id,
     'isAccept': False
+
     }).inserted_id 
     return jsonify({
         'status': 'success',
@@ -262,12 +268,12 @@ def book_appointment():
         'patient_id': str(patient_id)
     }), 201
 
-# ---------------------------------
-# Endpoint: Get  Appointment Requests
-# ---------------------------------
-@app.route('/appointments', methods=['GET'])
-def getAppointmentsRequest():
-    appointments = list(db.appointments.find({"isAccept": False}, {"_id": 0}))  # Exclure _id pour éviter les erreurs de sérialisation
+# -----------------------------------------------
+# Endpoint: Get  Appointment Requests by doctorId
+# -----------------------------------------------
+@app.route('/appointments/doctor/<doctor_id>', methods=['GET'])
+def getAppointmentsRequest_by_doctor_id(doctor_id):
+    appointments = list(db.appointments.find({"doctor_id": doctor_id, "isAccept": False}, {"_id": 0}))
     return jsonify(appointments), 200
 
 
