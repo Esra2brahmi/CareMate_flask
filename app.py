@@ -31,8 +31,8 @@ app.config.update(
     MAIL_SERVER='smtp.gmail.com',      # Replace with your mail server
     MAIL_PORT=587,                       # Replace with your mail server port
     MAIL_USE_TLS=True,
-    MAIL_USERNAME='esrabrahmii@gmail.com',  # Replace with your email
-    MAIL_PASSWORD='cppsczwrdrvaphmx'      # Replace with your email password
+    MAIL_USERNAME='rawiaghrairi@gmail.com',  # Replace with your email
+    MAIL_PASSWORD='Rgh@2020'      # Replace with your email password
 )
 mail = Mail(app)
 
@@ -338,17 +338,25 @@ def add_doctor():
     speciality = request.form.get('speciality')
     description = request.form.get('description')
     location = request.form.get('location')
-    image = request.files.get('image')
+    imageDoc = request.files.get('imageDoctor')
+    imageServ = request.files.get('imageService')
 
     if not all([name, email, speciality, description, location]):
         return jsonify({'status': 'fail', 'message': 'All fields are required'}), 400
 
-    image_url = ''
-    if image:
-        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
+    imageDoctor = ''
+    if imageDoc:
+        image_filename = f"{name.replace(' ', '_')}_{imageDoc.filename}"
         image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
-        image.save(image_path)
-        image_url = url_for('get_uploaded_file', filename=image_filename, _external=True)
+        imageDoc.save(image_path)
+        imageDoctor = url_for('get_uploaded_file', filename=image_filename, _external=True)
+
+    imageService = ''
+    if imageServ:
+        image_filename = f"{name.replace(' ', '_')}_{imageServ.filename}"
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+        imageServ .save(image_path)
+        imageService = url_for('get_uploaded_file', filename=image_filename, _external=True)
 
     doctor_id = db.doctors.insert_one({
         'name': name,
@@ -356,20 +364,14 @@ def add_doctor():
         'speciality': speciality,
         'description': description,
         'location': location,
-        'image_url': image_url
+        'imageDoctor': imageDoctor,
+        'imageService': imageService
     }).inserted_id
 
     return jsonify({'status': 'success', 'doctor_id': str(doctor_id)}), 201
-
-
-
-
-
 # ---------------------------------
-# Endpoint: get doctors
+# Endpoint: get All doctors
 # ---------------------------------
-
-
 @app.route('/doctors', methods=['GET'])
 def get_doctors():
     doctors = list(db.doctors.find())
@@ -377,6 +379,20 @@ def get_doctors():
         doc['_id'] = str(doc['_id'])  # Convert ObjectId to string
     return jsonify(doctors), 200
 
+# ---------------------------------
+# Endpoint: get doctor by id
+# ---------------------------------
+@app.route('/doctors/<_id>',methods=['GET'])
+def get_doctors_by_id(_id):
+ try:
+    doctor=db.doctors.find_one({'_id':ObjectId(_id)})
+    if doctor:
+        doctor['_id']=str(doctor['_id'])
+        return jsonify(doctor),200
+    else:
+        return jsonify({"error":"cannot fetching doctor"}),404
+ except Exception as e:
+     return jsonify({"error":str(e)}),400
 
 
 
