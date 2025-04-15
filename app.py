@@ -269,11 +269,11 @@ def book_appointment():
     }), 201
 
 # -----------------------------------------------
-# Endpoint: Get  Appointment Requests by doctorId
+# Endpoint: Get  Appointment Requests
 # -----------------------------------------------
-@app.route('/appointments/doctor/<doctor_id>', methods=['GET'])
-def getAppointmentsRequest_by_doctor_id(doctor_id):
-    appointments = list(db.appointments.find({"doctor_id": doctor_id, "isAccept": False}, {"_id": 0}))
+@app.route('/appointments', methods=['GET'])
+def getAppointmentsRequest():
+    appointments = list(db.appointments.find({"isAccept": False}, {"_id": 0}))
     return jsonify(appointments), 200
 
 
