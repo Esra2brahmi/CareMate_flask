@@ -31,7 +31,7 @@ app.config.update(
     MAIL_SERVER='smtp.gmail.com',      # Replace with your mail server
     MAIL_PORT=587,                       # Replace with your mail server port
     MAIL_USE_TLS=True,
-    MAIL_USERNAME='rawiaghrairi@gmail.com',  # Replace with your email
+    MAIL_USERNAME='esrabrahmii@gmail.com',  # Replace with your email
     MAIL_PASSWORD='Rgh@2020'      # Replace with your email password
 )
 mail = Mail(app)
@@ -245,9 +245,15 @@ def book_appointment():
      # verify data
     if not all([name, age, address, gender,photo, phone, email, date_rdv,doctor_id]):
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
-    # verify if patient exists 
-    if db.appointments.find_one({'email': email}):
-        return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
+     # First check if user exists
+    user = db.users.find_one({'email': email})
+    if not user:
+        return jsonify({
+            'status': 'error',
+            'code': 'USER_NOT_REGISTERED',  # Specific error code
+            'message': 'This email is not registered. Please sign up first.'
+        }), 403
+    
     # insert patients in the DB
     patient_id = db.appointments.insert_one({  
     'name': name,  
@@ -271,7 +277,7 @@ def book_appointment():
 # -----------------------------------------------
 # Endpoint: Get  Appointment Requests by doctorId
 # -----------------------------------------------
-@app.route('/appointments/doctor/<doctor_id>', methods=['GET'])
+@app.route('/appointments/doctor', methods=['GET'])
 def getAppointmentsRequest_by_doctor_id(doctor_id):
     appointments = list(db.appointments.find({"doctor_id": doctor_id, "isAccept": False}, {"_id": 0}))
     return jsonify(appointments), 200
@@ -344,10 +350,11 @@ def add_doctor():
     speciality = request.form.get('speciality')
     description = request.form.get('description')
     location = request.form.get('location')
+    phoneNumber = request.form.get('phoneNumber')
     imageDoc = request.files.get('imageDoctor')
     imageServ = request.files.get('imageService')
 
-    if not all([name, email, speciality, description, location]):
+    if not all([name, email, speciality, description, location,phoneNumber]):
         return jsonify({'status': 'fail', 'message': 'All fields are required'}), 400
 
     imageDoctor = ''
@@ -370,6 +377,7 @@ def add_doctor():
         'speciality': speciality,
         'description': description,
         'location': location,
+        'phoneNumber' : phoneNumber,
         'imageDoctor': imageDoctor,
         'imageService': imageService
     }).inserted_id
