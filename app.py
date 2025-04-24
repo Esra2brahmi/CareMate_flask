@@ -8,6 +8,7 @@ from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from bson.objectid import ObjectId
+from datetime import datetime
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -237,7 +238,7 @@ def book_appointment():
     age = data.get('age')
     address = data.get('address')
     gender = data.get('gender')
-    photo=data.get('photo')
+    image=data.get('photo')
     phone = data.get('phone')
     email = data.get('email')
     date_rdv = data.get('date_rdv')  # Date du rendez-vous
@@ -248,6 +249,12 @@ def book_appointment():
     # verify if patient exists 
     if db.appointments.find_one({'email': email}):
         return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
+    photo = ''
+    if image:
+        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+        image.save(image_path)
+        photo = url_for('get_uploaded_file', filename=image_filename, _external=True)
     # insert patients in the DB
     patient_id = db.appointments.insert_one({  
     'name': name,  
@@ -385,6 +392,7 @@ def get_doctors():
         doc['_id'] = str(doc['_id'])  # Convert ObjectId to string
     return jsonify(doctors), 200
 
+
 # ---------------------------------
 # Endpoint: get doctor by id
 # ---------------------------------
@@ -401,8 +409,40 @@ def get_doctors_by_id(_id):
      return jsonify({"error":str(e)}),400
 
 
+# ---------------------------------
+# Endpoint pour créer un événement
+# ---------------------------------
+@app.route('/events', methods=['POST'])
+def create_event():
+    data = request.get_json()
+    if not data or not data.get('title') or not data.get('start'):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
+    
+    event_id = db.events.insert_one({
+        'title': data['title'],
+        'start': data['start'],
+        'end': data.get('end'),
+        'allDay': data.get('allDay', False),
+        'created_at': datetime.utcnow()
+    }).inserted_id
+    
+    return jsonify({
+        'status': 'success',
+        'event': {
+            'id': str(event_id),
+            'title': data['title'],
+            'start': data['start'],
+            'end': data.get('end'),
+            'allDay': data.get('allDay', False)
+        }
+    }), 201
 
-
-
+# -------------------------------------------
+# Endpoint pour récupérer tous les événements
+# -------------------------------------------
+@app.route('/events', methods=['GET'])
+def get_events():
+    events = list(db.events.find({}, {'_id': 0, 'id': {'$toString': '$_id'}, 'title': 1, 'start': 1, 'end': 1, 'allDay': 1}))
+    return jsonify(events), 200
 if __name__ == '__main__':
     app.run(debug=True)
