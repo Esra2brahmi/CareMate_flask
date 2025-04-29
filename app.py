@@ -10,6 +10,7 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from bson.objectid import ObjectId
 import jwt
 from functools import wraps
+from datetime import datetime
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -270,7 +271,7 @@ def book_appointment():
     age = data.get('age')
     address = data.get('address')
     gender = data.get('gender')
-    photo=data.get('photo')
+    image=data.get('photo')
     phone = data.get('phone')
     email = data.get('email')
     date_rdv = data.get('date_rdv')  # Date du rendez-vous
@@ -278,15 +279,15 @@ def book_appointment():
      # verify data
     if not all([name, age, address, gender,photo, phone, email, date_rdv,doctor_id]):
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
-     # First check if user exists
-    user = db.users.find_one({'email': email})
-    if not user:
-        return jsonify({
-            'status': 'error',
-            'code': 'USER_NOT_REGISTERED',  # Specific error code
-            'message': 'This email is not registered. Please sign up first.'
-        }), 403
-    
+    # verify if patient exists 
+    if db.appointments.find_one({'email': email}):
+        return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
+    photo = ''
+    if image:
+        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
+        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+        image.save(image_path)
+        photo = url_for('get_uploaded_file', filename=image_filename, _external=True)
     # insert patients in the DB
     patient_id = db.appointments.insert_one({  
     'name': name,  
@@ -426,6 +427,7 @@ def get_doctors():
         doc['_id'] = str(doc['_id'])  # Convert ObjectId to string
     return jsonify(doctors), 200
 
+
 # ---------------------------------
 # Endpoint: get doctor by id
 # ---------------------------------
@@ -472,8 +474,39 @@ def get_patient_doctors(current_user):
         'doctor_ids': doctor_ids
     }), 200
 
+# Endpoint pour créer un événement
+# ---------------------------------
+@app.route('/events', methods=['POST'])
+def create_event():
+    data = request.get_json()
+    if not data or not data.get('title') or not data.get('start'):
+        return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
+    
+    event_id = db.events.insert_one({
+        'title': data['title'],
+        'start': data['start'],
+        'end': data.get('end'),
+        'allDay': data.get('allDay', False),
+        'created_at': datetime.utcnow()
+    }).inserted_id
+    
+    return jsonify({
+        'status': 'success',
+        'event': {
+            'id': str(event_id),
+            'title': data['title'],
+            'start': data['start'],
+            'end': data.get('end'),
+            'allDay': data.get('allDay', False)
+        }
+    }), 201
 
-
-
+# -------------------------------------------
+# Endpoint pour récupérer tous les événements
+# -------------------------------------------
+@app.route('/events', methods=['GET'])
+def get_events():
+    events = list(db.events.find({}, {'_id': 0, 'id': {'$toString': '$_id'}, 'title': 1, 'start': 1, 'end': 1, 'allDay': 1}))
+    return jsonify(events), 200
 if __name__ == '__main__':
     app.run(debug=True)
