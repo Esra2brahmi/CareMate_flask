@@ -8,6 +8,8 @@ from flask_mail import Mail, Message
 from werkzeug.security import generate_password_hash, check_password_hash
 from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from bson.objectid import ObjectId
+import jwt
+from functools import wraps
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -41,8 +43,39 @@ mail = Mail(app)
 mongo = PyMongo(app)
 db = mongo.db  # Access the MongoDB database defined in MONGO_URI
 
+
+
+
 # Serializer for generating tokens
 serializer = URLSafeTimedSerializer(app.config['SECRET_KEY'])
+
+
+
+
+
+# Add this decorator for protected routes
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        # Get token from Authorization header
+        if 'Authorization' in request.headers:
+            token = request.headers['Authorization'].split(" ")[1]
+        
+        if not token:
+            return jsonify({'message': 'Token is missing!'}), 401
+
+        try:
+            data = jwt.decode(token, app.config['SECRET_KEY'], algorithms=["HS256"])
+            current_user = db.users.find_one({'email': data['email']})
+            if not current_user:
+                return jsonify({'message': 'User not found!'}), 401
+        except Exception as e:
+            return jsonify({'message': 'Token is invalid!', 'error': str(e)}), 401
+
+        return f(current_user, *args, **kwargs)
+    return decorated
+
 
 # ---------------------------
 # Endpoint: User Registration
@@ -275,11 +308,11 @@ def book_appointment():
     }), 201
 
 # -----------------------------------------------
-# Endpoint: Get  Appointment Requests by doctorId
+# Endpoint: Get  Appointment Requests 
 # -----------------------------------------------
-@app.route('/appointments/doctor', methods=['GET'])
-def getAppointmentsRequest_by_doctor_id(doctor_id):
-    appointments = list(db.appointments.find({"doctor_id": doctor_id, "isAccept": False}, {"_id": 0}))
+@app.route('/appointments', methods=['GET'])
+def getAppointmentsRequest():
+    appointments = list(db.appointments.find({ "isAccept": False}, {"_id": 0}))
     return jsonify(appointments), 200
 
 
@@ -408,6 +441,36 @@ def get_doctors_by_id(_id):
  except Exception as e:
      return jsonify({"error":str(e)}),400
 
+
+# ---------------------------------
+# Endpoint: Get doctor IDs by patient email (unique and approved appointments)
+# ---------------------------------
+@app.route('/patient-doctors', methods=['GET'])
+@token_required
+def get_patient_doctors(current_user):
+    if current_user['role'] != 'patient':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    
+    # Find all approved appointments for this patient
+    appointments = list(db.appointments.find({
+        'email': current_user['email'],
+        'isAccept': True
+    }))
+    
+    # Extract unique doctor IDs
+    doctor_ids = []
+    seen_doctors = set()
+    
+    for appt in appointments:
+        doctor_id = appt.get('doctor_id')
+        if doctor_id and doctor_id not in seen_doctors:
+            seen_doctors.add(doctor_id)
+            doctor_ids.append(doctor_id)
+    
+    return jsonify({
+        'status': 'success',
+        'doctor_ids': doctor_ids
+    }), 200
 
 
 
