@@ -10,8 +10,7 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from bson.objectid import ObjectId
 import jwt
 from functools import wraps
-from datetime import datetime
-
+from datetime import datetime, timedelta
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -34,7 +33,7 @@ app.config.update(
     MAIL_SERVER='smtp.gmail.com',      # Replace with your mail server
     MAIL_PORT=587,                       # Replace with your mail server port
     MAIL_USE_TLS=True,
-    MAIL_USERNAME='esrabrahmii@gmail.com',  # Replace with your email
+    MAIL_USERNAME='rawiaghrairi@gmail.com',  # Replace with your email
     MAIL_PASSWORD='Rgh@2020'      # Replace with your email password
 )
 mail = Mail(app)
@@ -118,6 +117,7 @@ def register():
 # ---------------------------
 # Endpoint: User Login
 # ---------------------------
+
 @app.route('/login', methods=['POST'])
 def login():
     # Accept JSON data or form data
@@ -132,16 +132,30 @@ def login():
 
     # Find the user by email
     user = db.users.find_one({'email': email})
-    if user and check_password_hash(user['password'], password):
-        # In a real-world app, you might return a token here
-        return jsonify({
-            'status': 'success',
-            'message': 'Logged in successfully',
-            'user': {'_id': str(user['_id']),'name': user['name'], 'email': user['email'],'role': user['role']}
-        }), 200
-    else:
+    if not user or not check_password_hash(user['password'], password):
         return jsonify({'status': 'fail', 'message': 'Invalid credentials'}), 401
 
+    # Generate JWT token (valid for 24 hours)
+    token = jwt.encode(
+        {
+            'email': user['email'],
+            'role': user['role'],
+            'exp': datetime.utcnow() + timedelta(minutes=50)  # Expiration time
+        },
+        app.config['SECRET_KEY'],  # Ensure this is set in your Flask app config
+        algorithm="HS256"
+    )
+    return jsonify({
+        'status': 'success',
+        'message': 'Logged in successfully',
+        'user': {
+            '_id': str(user['_id']),
+            'name': user['name'],
+            'email': user['email'],
+            'role': user['role']
+        },
+        'access_token': token  # ⚠️ Critical: Return the token!
+    }), 200
 # ---------------------------
 # Endpoint: Request Password Reset
 # ---------------------------
@@ -271,23 +285,15 @@ def book_appointment():
     age = data.get('age')
     address = data.get('address')
     gender = data.get('gender')
-    image=data.get('photo')
+    photo=data.get('photo')
     phone = data.get('phone')
     email = data.get('email')
     date_rdv = data.get('date_rdv')  # Date du rendez-vous
     doctor_id = data.get('doctor_id')
      # verify data
-    if not all([name, age, address, gender,photo, phone, email, date_rdv,doctor_id]):
+    if not all([name, age, address, gender,photo, phone, email, date_rdv,photo,doctor_id]):
         return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
-    # verify if patient exists 
-    if db.appointments.find_one({'email': email}):
-        return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
-    photo = ''
-    if image:
-        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
-        image.save(image_path)
-        photo = url_for('get_uploaded_file', filename=image_filename, _external=True)
+ 
     # insert patients in the DB
     patient_id = db.appointments.insert_one({  
     'name': name,  
@@ -384,11 +390,11 @@ def add_doctor():
     speciality = request.form.get('speciality')
     description = request.form.get('description')
     location = request.form.get('location')
-    phoneNumber = request.form.get('phoneNumber')
+    phone=request.form.get('phone'),
     imageDoc = request.files.get('imageDoctor')
     imageServ = request.files.get('imageService')
 
-    if not all([name, email, speciality, description, location,phoneNumber]):
+    if not all([name, email, speciality, description, location,phone]):
         return jsonify({'status': 'fail', 'message': 'All fields are required'}), 400
 
     imageDoctor = ''
@@ -411,9 +417,9 @@ def add_doctor():
         'speciality': speciality,
         'description': description,
         'location': location,
-        'phoneNumber' : phoneNumber,
         'imageDoctor': imageDoctor,
-        'imageService': imageService
+        'imageService': imageService,
+        'phone' : phone
     }).inserted_id
 
     return jsonify({'status': 'success', 'doctor_id': str(doctor_id)}), 201
@@ -453,27 +459,47 @@ def get_patient_doctors(current_user):
     if current_user['role'] != 'patient':
         return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
     
-    # Find all approved appointments for this patient
+    # 1. Récupérer tous les rendez-vous approuvés
     appointments = list(db.appointments.find({
         'email': current_user['email'],
         'isAccept': True
     }))
     
-    # Extract unique doctor IDs
+    # 2. Créer une liste de tous les médecins avec leurs rendez-vous
+    doctors_data = []
     doctor_ids = []
     seen_doctors = set()
-    
     for appt in appointments:
         doctor_id = appt.get('doctor_id')
         if doctor_id and doctor_id not in seen_doctors:
             seen_doctors.add(doctor_id)
             doctor_ids.append(doctor_id)
+    for ids in doctor_ids:  
+        try:
+            # Récupérer les infos du médecin
+            doctor = db.doctors.find_one({'_id': ObjectId(ids)})
+            if doctor:
+                # Ajouter les détails du rendez-vous au médecin
+                doctor_data = {
+                    'ids': str(doctor['_id']),
+                    'name': doctor.get('name'),
+                    'email': doctor.get('email'),
+                    'speciality': doctor.get('speciality'),
+                    'description': doctor.get('description'),
+                    'location': doctor.get('location'),
+                    'imageDoctor': doctor.get('imageDoctor'),  # Ajoutez la date du RDV
+                    'imageService': doctor.get('imageService'),  # Ajoutez l'ID du rendez-vous
+                    'phone': doctor.get('phone')
+                }
+                doctors_data.append(doctor_data)
+        except:
+            continue
     
     return jsonify({
         'status': 'success',
-        'doctor_ids': doctor_ids
+        'count': len(doctors_data),
+        'doctors': doctors_data  # Retourne tous les médecins avec leurs rendez-vous
     }), 200
-
 # Endpoint pour créer un événement
 # ---------------------------------
 @app.route('/events', methods=['POST'])
@@ -508,5 +534,7 @@ def create_event():
 def get_events():
     events = list(db.events.find({}, {'_id': 0, 'id': {'$toString': '$_id'}, 'title': 1, 'start': 1, 'end': 1, 'allDay': 1}))
     return jsonify(events), 200
+
+
 if __name__ == '__main__':
     app.run(debug=True)
