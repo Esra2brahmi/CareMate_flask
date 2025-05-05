@@ -10,7 +10,10 @@ from itsdangerous import URLSafeTimedSerializer, SignatureExpired, BadSignature
 from bson.objectid import ObjectId
 import jwt
 from functools import wraps
-from datetime import datetime
+from datetime import datetime, timedelta
+from werkzeug.utils import secure_filename
+
+from bson.objectid import ObjectId
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -25,6 +28,7 @@ if not os.path.exists(app.config['UPLOAD_FOLDER']):
 CORS(app)
 
 
+  
 @app.route('/')
 def index():
     return jsonify({'message': 'Welcome to the Flask API'})
@@ -118,6 +122,7 @@ def register():
 # ---------------------------
 # Endpoint: User Login
 # ---------------------------
+
 @app.route('/login', methods=['POST'])
 def login():
     # Accept JSON data or form data
@@ -132,16 +137,30 @@ def login():
 
     # Find the user by email
     user = db.users.find_one({'email': email})
-    if user and check_password_hash(user['password'], password):
-        # In a real-world app, you might return a token here
-        return jsonify({
-            'status': 'success',
-            'message': 'Logged in successfully',
-            'user': {'_id': str(user['_id']),'name': user['name'], 'email': user['email'],'role': user['role']}
-        }), 200
-    else:
+    if not user or not check_password_hash(user['password'], password):
         return jsonify({'status': 'fail', 'message': 'Invalid credentials'}), 401
 
+    # Generate JWT token (valid for 24 hours)
+    token = jwt.encode(
+        {
+            'email': user['email'],
+            'role': user['role'],
+            'exp': datetime.utcnow() + timedelta(minutes=10)  # Expiration time
+        },
+        app.config['SECRET_KEY'],  # Ensure this is set in your Flask app config
+        algorithm="HS256"
+    )
+    return jsonify({
+        'status': 'success',
+        'message': 'Logged in successfully',
+        'user': {
+            '_id': str(user['_id']),
+            'name': user['name'],
+            'email': user['email'],
+            'role': user['role']
+        },
+        'access_token': token  # ⚠️ Critical: Return the token!
+    }), 200
 # ---------------------------
 # Endpoint: Request Password Reset
 # ---------------------------
@@ -248,9 +267,11 @@ def upload_file():
 # ---------------------------
 @app.route('/uploads/<filename>')
 def get_uploaded_file(filename):
-    return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
-
-
+    return send_from_directory(
+        app.config['UPLOAD_FOLDER'],
+        filename,
+        as_attachment=True  # 👈 Ce paramètre force le téléchargement
+    )
 # ---------------------------
 # Endpoint: list uploaded files
 # ---------------------------
@@ -266,65 +287,122 @@ def list_uploaded_files():
 # ---------------------------
 @app.route('/book-appointment', methods=['POST'])
 def book_appointment():
-    data = request.get_json(silent=True) or request.form
-    name = data.get('name')
-    age = data.get('age')
-    address = data.get('address')
-    gender = data.get('gender')
-    image=data.get('photo')
-    phone = data.get('phone')
-    email = data.get('email')
-    date_rdv = data.get('date_rdv')  # Date du rendez-vous
-    doctor_id = data.get('doctor_id')
-     # verify data
-    if not all([name, age, address, gender,photo, phone, email, date_rdv,doctor_id]):
-        return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
-    # verify if patient exists 
-    if db.appointments.find_one({'email': email}):
-        return jsonify({'status': 'fail', 'message': 'Appointment already exists'}), 409
-    photo = ''
-    if image:
-        image_filename = f"{name.replace(' ', '_')}_{image.filename}"
-        image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
-        image.save(image_path)
-        photo = url_for('get_uploaded_file', filename=image_filename, _external=True)
-    # insert patients in the DB
-    patient_id = db.appointments.insert_one({  
-    'name': name,  
-    'age': age,  
-    'address': address,  
-    'gender': gender,  
-    'photo':photo,
-    'phone': phone,  
-    'email': email,  
-    'date_rdv': date_rdv,
-    'doctor_id':doctor_id,
-    'isAccept': False
+    try:
+        # Vérifiez si c'est FormData
+        if request.files:
+            photo = request.files.get('photo')
+            photo_filename = secure_filename(photo.filename)
+            photo_path = os.path.join(app.config['UPLOAD_FOLDER'], photo_filename)
+            photo.save(photo_path)
+            photo_url = url_for('get_uploaded_file', filename=photo_filename, _external=True)
+        else:
+            return jsonify({'status': 'fail', 'message': 'Photo is required'}), 400
 
-    }).inserted_id 
-    return jsonify({
-        'status': 'success',
-        'message': 'Appointment booked successfully',
-        'patient_id': str(patient_id)
-    }), 201
+        # Récupérez les autres données
+        name = request.form.get('name')
+        age = request.form.get('age')
+        address = request.form.get('address')
+        gender = request.form.get('gender')
+        phone = request.form.get('phone')
+        email = request.form.get('email')
+        date_rdv = request.form.get('date_rdv')
+        doctor_id = request.form.get('doctor_id')
 
+        # Vérification des champs
+        required_fields = [name, age, address, gender, phone, email, date_rdv, doctor_id]
+        if not all(required_fields):
+            return jsonify({'status': 'fail', 'message': 'Missing fields'}), 400
+
+        # Insertion dans la base de données
+        appointment_data = {
+            'name': name,
+            'age': age,
+            'address': address,
+            'gender': gender,
+            'photo': photo_url,
+            'phone': phone,
+            'email': email,
+            'date_rdv': date_rdv,
+            'doctor_id': str(doctor_id),
+            'isAccept': False,
+            'created_at': datetime.utcnow()
+        }
+
+        patient_id = db.appointments.insert_one(appointment_data).inserted_id
+
+        return jsonify({
+            'status': 'success',
+            'message': 'Appointment booked successfully',
+            'patient_id': str(patient_id)
+        }), 201
+
+    except Exception as e:
+        print(f"Error booking appointment: {str(e)}")
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 # -----------------------------------------------
-# Endpoint: Get  Appointment Requests 
+# Endpoint: Get Appointment Requests 
 # -----------------------------------------------
 @app.route('/appointments', methods=['GET'])
-def getAppointmentsRequest():
-    appointments = list(db.appointments.find({ "isAccept": False}, {"_id": 0}))
-    return jsonify(appointments), 200
-
-
+@token_required
+def getAppointmentsRequest(current_user):
+    if current_user['role'] != 'doctor':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    
+    doctor = db.doctors.find_one({
+        'email': current_user['email']
+    })
+    
+    if not doctor:
+        return jsonify({'status': 'fail', 'message': 'Doctor not found'}), 404
+    
+    appointments = list(db.appointments.find({
+        'doctor_id': str(doctor['_id']),
+        'isAccept': False
+    }))
+    
+    # Convertir les ObjectId en strings pour la sérialisation JSON
+    for appt in appointments:
+        appt['_id'] = str(appt['_id'])
+        if 'doctor_id' in appt:
+            appt['doctor_id'] = str(appt['doctor_id'])
+    
+    return jsonify({
+        'status': 'success',
+        'appointments': appointments
+    }), 200
 # ---------------------------------
 # Endpoint: Get accepted Appointment (patientList)
 # ---------------------------------
 @app.route('/appointments/accepted', methods=['GET'])
-def get_accepted_appointments():
-    accepted_appointments = list(db.appointments.find({"isAccept": True}, {"_id": 0}))
-    return jsonify(accepted_appointments), 200
-
+@token_required
+def get_accepted_appointments(current_user):
+    if current_user['role'] != 'doctor':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    
+    doctor = db.doctors.find_one({
+        'email': current_user['email']
+    })
+    
+    if not doctor:
+        return jsonify({'status': 'fail', 'message': 'Doctor not found'}), 404
+    
+    accepted_appointments = list(db.appointments.find({
+        'doctor_id': str(doctor['_id']),
+        'isAccept': True
+    }))
+    # Convertir les ObjectId en strings pour la sérialisation JSON
+    for appt in accepted_appointments:
+        appt['_id'] = str(appt['_id'])
+        if 'doctor_id' in appt:
+            appt['doctor_id'] = str(appt['doctor_id'])
+    
+    return jsonify({
+        'status': 'success',
+        'appointments': accepted_appointments
+    }), 200
 # ---------------------------------
 # Endpoint: Accept Appointment
 # ---------------------------------
@@ -384,11 +462,11 @@ def add_doctor():
     speciality = request.form.get('speciality')
     description = request.form.get('description')
     location = request.form.get('location')
-    phoneNumber = request.form.get('phoneNumber')
+    phone=request.form.get('phone'),
     imageDoc = request.files.get('imageDoctor')
     imageServ = request.files.get('imageService')
 
-    if not all([name, email, speciality, description, location,phoneNumber]):
+    if not all([name, email, speciality, description, location,phone]):
         return jsonify({'status': 'fail', 'message': 'All fields are required'}), 400
 
     imageDoctor = ''
@@ -411,9 +489,9 @@ def add_doctor():
         'speciality': speciality,
         'description': description,
         'location': location,
-        'phoneNumber' : phoneNumber,
         'imageDoctor': imageDoctor,
-        'imageService': imageService
+        'imageService': imageService,
+        'phone' : phone
     }).inserted_id
 
     return jsonify({'status': 'success', 'doctor_id': str(doctor_id)}), 201
@@ -452,28 +530,46 @@ def get_doctors_by_id(_id):
 def get_patient_doctors(current_user):
     if current_user['role'] != 'patient':
         return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
-    
-    # Find all approved appointments for this patient
+    # 1. Récupérer tous les rendez-vous approuvés
     appointments = list(db.appointments.find({
         'email': current_user['email'],
         'isAccept': True
     }))
-    
-    # Extract unique doctor IDs
+    # 2. Créer une liste de tous les médecins avec leurs rendez-vous
+    doctors_data = []
     doctor_ids = []
     seen_doctors = set()
-    
     for appt in appointments:
         doctor_id = appt.get('doctor_id')
         if doctor_id and doctor_id not in seen_doctors:
             seen_doctors.add(doctor_id)
             doctor_ids.append(doctor_id)
+    for ids in doctor_ids:  
+        try:
+            # Récupérer les infos du médecin
+            doctor = db.doctors.find_one({'_id': ObjectId(ids)})
+            if doctor:
+                # Ajouter les détails du rendez-vous au médecin
+                doctor_data = {
+                    'ids': str(doctor['_id']),
+                    'name': doctor.get('name'),
+                    'email': doctor.get('email'),
+                    'speciality': doctor.get('speciality'),
+                    'description': doctor.get('description'),
+                    'location': doctor.get('location'),
+                    'imageDoctor': doctor.get('imageDoctor'),  # Ajoutez la date du RDV
+                    'imageService': doctor.get('imageService'),  # Ajoutez l'ID du rendez-vous
+                    'phone': doctor.get('phone')
+                }
+                doctors_data.append(doctor_data)
+        except:
+            continue
     
     return jsonify({
         'status': 'success',
-        'doctor_ids': doctor_ids
+        'count': len(doctors_data),
+        'doctors': doctors_data  # Retourne tous les médecins avec leurs rendez-vous
     }), 200
-
 # Endpoint pour créer un événement
 # ---------------------------------
 @app.route('/events', methods=['POST'])
@@ -508,5 +604,191 @@ def create_event():
 def get_events():
     events = list(db.events.find({}, {'_id': 0, 'id': {'$toString': '$_id'}, 'title': 1, 'start': 1, 'end': 1, 'allDay': 1}))
     return jsonify(events), 200
+# -------------------------------------------
+# Endpoint create dignostics file
+# -------------------------------------------
+@app.route('/diagnostics', methods=['POST'])
+@token_required
+def add_diagnostics_File(current_user):
+    if current_user['role'] != 'patient':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    try:
+        # 1. Récupérer les données du formulaire
+        filname = request.form.get('filname')
+        doctor_id = request.form.get('doctor_id')
+        image = request.files.get('image')
+        
+        # 3. Vérifier les champs obligatoires
+        if not all([filname, doctor_id]):
+            return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
+         # 4. Chercher un rendez-vous correspondant à ce médecin et cet email
+        appointment = db.appointments.find_one({
+            'email':current_user['email'],
+            'isAccept':True
+        })
+        # Exemple temporaire à ajouter dans ton Flask ou test directement dans MongoDB Compass
+        print(appointment)
+        print(current_user['email'])
+        if not appointment:
+            return jsonify({
+                'status': 'fail', 
+                'message': 'No appointment found for this doctor and patient'
+            }), 404
+
+        # 5. Récupérer le patient_id depuis le rendez-vous
+        patient_id = str(appointment['_id'])  # ou appointment['patient_id'] selon votre schéma
+        # 6. Traitement du fichier image
+        DiagnosticFile = ''
+        if image:
+            image_filename = f"{filname.replace(' ', '_')}_{image.filename}"
+            image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
+            image.save(image_path)
+            DiagnosticFile = url_for('get_uploaded_file', filename=image_filename, _external=True)
+            # 7. Enregistrement dans la base de données
+        file_id = db.file.insert_one({
+            'filname': filname,
+            'doctor_id': appointment['doctor_id'],
+            'patient_id': patient_id,
+            'DiagnosticFile': DiagnosticFile,
+            'patient_id': patient_id  # Stocker aussi l'ID du rendez-vous si besoin
+        }).inserted_id
+
+        return jsonify({
+            'status': 'success',
+            'file_id': str(file_id),
+            'patient_id': patient_id
+        }), 201
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+# ---------------------------------------------------
+# Endpoint get dignostics by dictor_id and patient_id
+# ----------------------------------------------------
+@app.route('/FilePatient', methods=['GET'])
+@token_required
+def get_diagnostics_File_by_patientId(current_user):
+    if current_user['role'] != 'patient':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    try:
+        print("current_user:", current_user)
+
+        # Chercher un rendez-vous correspondant à ce patient
+        appointment = db.appointments.find_one({
+            'email': current_user['email'],
+            'isAccept': True
+        })
+
+        print("Appointment trouvé:", appointment)
+
+        if not appointment:
+            return jsonify({
+                'status': 'fail',
+                'message': 'No appointment found for this patient'
+            }), 404
+
+        # Vérification du contenu des ID
+        print("doctor_id:", appointment.get('doctor_id'))
+        print("patient_id:", appointment.get('patient_id'))
+
+        files = list(db.file.find({
+            'doctor_id': appointment['doctor_id'],
+            'patient_id': str(appointment['_id'])
+        }, {
+            '_id': 0
+        }))
+
+        print("Fichiers trouvés:", files)
+
+        return jsonify(files), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()  # Montre la trace complète de l'erreur
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+# ---------------------------------
+# Endpoint delete dignostics by id
+# ---------------------------------
+@app.route('/diagnostics/<file_id>', methods=['DELETE'])
+@token_required
+def delete_diagnostics_file(current_user, file_id):
+    if current_user['role'] != 'patient':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    try:
+        # Vérifier si le fichier existe
+        file_data = db.file.find_one({'_id': file_id})
+        if not file_data:
+            return jsonify({'status': 'fail', 'message': 'File not found'}), 404
+        
+        # Supprimer le fichier physique si existe
+        if 'DiagnosticFile' in file_data:
+            filename = file_data['DiagnosticFile'].split('/')[-1]  # Récupère le nom de fichier
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            if os.path.exists(file_path):
+                os.remove(file_path)
+
+        # Supprimer l'entrée dans la base MongoDB
+        db.file.delete_one({'_id': file_id})
+
+        return jsonify({'status': 'success', 'message': 'File deleted'}), 200
+    except Exception as e:
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+# ---------------------------------------------------
+# Endpoint get dignostics by dictor_id and patient_id
+# ----------------------------------------------------
+
+
+@app.route('/FileDoctor', methods=['GET'])
+@token_required
+def get_diagnostics_File_by_doctorId(current_user):
+    if current_user['role'] != 'doctor':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    try:
+        print("current_user:", current_user)
+
+        # Trouver le docteur
+        doctor = db.doctors.find_one({
+            'email': current_user['email']
+        })
+        if not doctor:
+            return jsonify({'status': 'fail', 'message': 'Doctor not found'}), 404
+
+        doctor_id = str(doctor['_id'])  # Convertir en string
+        print("doctor_id:", doctor_id)
+        # Trouver un rendez-vous accepté
+        appointment = db.appointments.find_one({
+            'doctor_id':doctor_id,  # ou simplement doctor['_id']
+            'isAccept': True
+        })
+        if not appointment:
+            return jsonify({'status': 'fail', 'message': 'No accepted appointment found for this doctor'}), 404
+
+        patient_id = str(appointment['_id'])  # Convertir aussi en string
+
+        # Rechercher les fichiers
+        files = list(db.file.find({
+            'doctor_id': doctor_id,      # string dans la collection file
+            'patient_id': patient_id     # string dans la collection file
+        }, {
+            '_id': 0
+        }))
+
+
+        print("patient_id:", patient_id)
+        print("Fichiers trouvés:", files)
+
+        return jsonify(files), 200
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 if __name__ == '__main__':
     app.run(debug=True)
+    
