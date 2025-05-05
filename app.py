@@ -12,8 +12,8 @@ import jwt
 from functools import wraps
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
-
 from bson.objectid import ObjectId
+
 
 app = Flask(__name__)
 app.config.from_object(Config)
@@ -616,12 +616,21 @@ def add_diagnostics_File(current_user):
         # 1. Récupérer les données du formulaire
         filname = request.form.get('filname')
         doctor_id = request.form.get('doctor_id')
-        image = request.files.get('image')
+        file = request.files.get('file')  # Changed from 'image' to 'file' for more generic naming
         
         # 3. Vérifier les champs obligatoires
-        if not all([filname, doctor_id]):
+        if not all([filname, doctor_id, file]):
             return jsonify({'status': 'fail', 'message': 'Missing required fields'}), 400
-         # 4. Chercher un rendez-vous correspondant à ce médecin et cet email
+            
+        # Check if file is allowed (image or PDF)
+        filename = file.filename
+        file_ext = filename.rsplit('.', 1)[1].lower() if '.' in filename else ''
+        allowed_extensions = {'png', 'jpg', 'jpeg', 'gif', 'pdf'}
+        
+        if file_ext not in allowed_extensions:
+            return jsonify({'status': 'fail', 'message': 'File type not allowed. Only images and PDFs are accepted'}), 400
+         
+        # 4. Chercher un rendez-vous correspondant à ce médecin et cet email
         appointment = db.appointments.find_one({
             'email':current_user['email'],
             'isAccept':True
@@ -637,26 +646,34 @@ def add_diagnostics_File(current_user):
 
         # 5. Récupérer le patient_id depuis le rendez-vous
         patient_id = str(appointment['_id'])  # ou appointment['patient_id'] selon votre schéma
-        # 6. Traitement du fichier image
+        
+        # 6. Traitement du fichier
         DiagnosticFile = ''
-        if image:
-            image_filename = f"{filname.replace(' ', '_')}_{image.filename}"
-            image_path = os.path.join(app.config['UPLOAD_FOLDER'], image_filename)
-            image.save(image_path)
-            DiagnosticFile = url_for('get_uploaded_file', filename=image_filename, _external=True)
-            # 7. Enregistrement dans la base de données
+        file_type = 'pdf' if file_ext == 'pdf' else 'image'
+        
+        if file:
+            secure_filename_value = secure_filename(file.filename)
+            file_filename = f"{filname.replace(' ', '_')}_{secure_filename_value}"
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], file_filename)
+            file.save(file_path)
+            DiagnosticFile = url_for('get_uploaded_file', filename=file_filename, _external=True)
+            
+        # 7. Enregistrement dans la base de données
         file_id = db.file.insert_one({
             'filname': filname,
             'doctor_id': appointment['doctor_id'],
             'patient_id': patient_id,
             'DiagnosticFile': DiagnosticFile,
-            'patient_id': patient_id  # Stocker aussi l'ID du rendez-vous si besoin
+            'file_type': file_type,  # Store whether it's an image or PDF
+            'isConsulted': False,  # New field - initialize as False
+            'uploaded_at': datetime.utcnow()
         }).inserted_id
 
         return jsonify({
             'status': 'success',
             'file_id': str(file_id),
-            'patient_id': patient_id
+            'patient_id': patient_id,
+            'file_type': file_type
         }), 201
     except Exception as e:
         return jsonify({
@@ -664,7 +681,7 @@ def add_diagnostics_File(current_user):
             'message': str(e)
         }), 500
 # ---------------------------------------------------
-# Endpoint get dignostics by dictor_id and patient_id
+# Endpoint get dignostics by patient_id
 # ----------------------------------------------------
 @app.route('/FilePatient', methods=['GET'])
 @token_required
@@ -675,33 +692,50 @@ def get_diagnostics_File_by_patientId(current_user):
         print("current_user:", current_user)
 
         # Chercher un rendez-vous correspondant à ce patient
-        appointment = db.appointments.find_one({
+        appointments = list(db.appointments.find({
             'email': current_user['email'],
             'isAccept': True
-        })
+        }))
 
-        print("Appointment trouvé:", appointment)
-
-        if not appointment:
+        if not appointments:
             return jsonify({
                 'status': 'fail',
                 'message': 'No appointment found for this patient'
             }), 404
 
-        # Vérification du contenu des ID
-        print("doctor_id:", appointment.get('doctor_id'))
-        print("patient_id:", appointment.get('patient_id'))
+        all_files = []
+        # Get files for each appointment
+        for appointment in appointments:
+            appointment_id = str(appointment['_id'])
+            doctor_id = appointment.get('doctor_id')
+            
+            # Debugging info
+            print(f"Looking for files with doctor_id: {doctor_id}, patient_id: {appointment_id}")
+            
+            # Find files for this appointment
+            files = list(db.file.find({
+                'doctor_id': doctor_id,
+                'patient_id': appointment_id
+            }))
+            
+            # Process each file
+            for file in files:
+                file_data = {
+                    'id': str(file['_id']),
+                    'filname': file.get('filname', ''),
+                    'DiagnosticFile': file.get('DiagnosticFile', ''),
+                    'file_type': file.get('file_type', 'image'),  # Default to 'image' for backward compatibility
+                    'isConsulted': file.get('isConsulted', False),  # Include consultation status
+                    'doctor_id': doctor_id,
+                    'patient_id': appointment_id,
+                    'uploaded_at': file.get('uploaded_at', datetime.utcnow()).isoformat() if isinstance(file.get('uploaded_at'), datetime) else None
+                }
+                all_files.append(file_data)
 
-        files = list(db.file.find({
-            'doctor_id': appointment['doctor_id'],
-            'patient_id': str(appointment['_id'])
-        }, {
-            '_id': 0
-        }))
-
-        print("Fichiers trouvés:", files)
-
-        return jsonify(files), 200
+        print(f"Total files found: {len(all_files)}")
+        
+        # Return in a format expected by frontend
+        return jsonify(all_files), 200
 
     except Exception as e:
         import traceback
@@ -738,10 +772,8 @@ def delete_diagnostics_file(current_user, file_id):
     except Exception as e:
         return jsonify({'status': 'error', 'message': str(e)}), 500
 # ---------------------------------------------------
-# Endpoint get dignostics by dictor_id and patient_id
+# Endpoint get dignostics by doctor_id 
 # ----------------------------------------------------
-
-
 @app.route('/FileDoctor', methods=['GET'])
 @token_required
 def get_diagnostics_File_by_doctorId(current_user):
@@ -759,34 +791,88 @@ def get_diagnostics_File_by_doctorId(current_user):
 
         doctor_id = str(doctor['_id'])  # Convertir en string
         print("doctor_id:", doctor_id)
-        # Trouver un rendez-vous accepté
-        appointment = db.appointments.find_one({
-            'doctor_id':doctor_id,  # ou simplement doctor['_id']
+        
+        # Find all accepted appointments for this doctor
+        appointments = list(db.appointments.find({
+            'doctor_id': doctor_id,
             'isAccept': True
-        })
-        if not appointment:
-            return jsonify({'status': 'fail', 'message': 'No accepted appointment found for this doctor'}), 404
-
-        patient_id = str(appointment['_id'])  # Convertir aussi en string
-
-        # Rechercher les fichiers
-        files = list(db.file.find({
-            'doctor_id': doctor_id,      # string dans la collection file
-            'patient_id': patient_id     # string dans la collection file
-        }, {
-            '_id': 0
         }))
+        
+        if not appointments:
+            return jsonify({'status': 'fail', 'message': 'No accepted appointments found for this doctor'}), 404
 
+        all_files = []
+        # Get files for each appointment
+        for appointment in appointments:
+            appointment_id = str(appointment['_id'])
+            
+            # Debugging info
+            print(f"Looking for files with doctor_id: {doctor_id}, patient_id: {appointment_id}")
+            
+            # Find files for this appointment
+            files = list(db.file.find({
+                'doctor_id': doctor_id,
+                'patient_id': appointment_id
+            }))
+            
+            # Get patient info to include with files
+            patient_name = appointment.get('name', 'Unknown Patient')
+            patient_email = appointment.get('email', 'No email')
+            
+            # Process each file
+            for file in files:
+                file_data = {
+                    'id': str(file['_id']),
+                    'filname': file.get('filname', ''),
+                    'DiagnosticFile': file.get('DiagnosticFile', ''),
+                    'file_type': file.get('file_type', 'image'),  # Default to 'image' for backward compatibility
+                    'doctor_id': doctor_id,
+                    'patient_id': appointment_id,
+                    'patient_name': patient_name,
+                    'patient_email': patient_email,
+                    'uploaded_at': file.get('uploaded_at', datetime.utcnow()).isoformat() if isinstance(file.get('uploaded_at'), datetime) else None
+                }
+                all_files.append(file_data)
 
-        print("patient_id:", patient_id)
-        print("Fichiers trouvés:", files)
-
-        return jsonify(files), 200
+        print(f"Total files found: {len(all_files)}")
+        
+        # Return in a format expected by frontend
+        return jsonify(all_files), 200
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# -------------------------------------------
+# Endpoint to mark a file as consulted
+# -------------------------------------------
+@app.route('/diagnostics/<file_id>/consult', methods=['PATCH'])
+@token_required
+def mark_file_as_consulted(current_user, file_id):
+    if current_user['role'] != 'doctor':
+        return jsonify({'status': 'fail', 'message': 'Unauthorized access'}), 403
+    
+    try:
+        # Find the file and update it
+        result = db.file.update_one(
+            {'_id': ObjectId(file_id)},
+            {'$set': {'isConsulted': True}}
+        )
+        
+        if result.modified_count == 0:
+            return jsonify({'status': 'fail', 'message': 'File not found or already marked as consulted'}), 404
+            
+        return jsonify({
+            'status': 'success',
+            'message': 'File marked as consulted'
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
 
 
 if __name__ == '__main__':
