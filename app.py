@@ -826,6 +826,7 @@ def get_diagnostics_File_by_doctorId(current_user):
                     'filname': file.get('filname', ''),
                     'DiagnosticFile': file.get('DiagnosticFile', ''),
                     'file_type': file.get('file_type', 'image'),  # Default to 'image' for backward compatibility
+                    'isConsulted': file.get('isConsulted', False),  # Include consultation status
                     'doctor_id': doctor_id,
                     'patient_id': appointment_id,
                     'patient_name': patient_name,
@@ -866,6 +867,43 @@ def mark_file_as_consulted(current_user, file_id):
         return jsonify({
             'status': 'success',
             'message': 'File marked as consulted'
+        }), 200
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': str(e)
+        }), 500
+
+# -------------------------------------------
+# Endpoint to get doctor by email
+# -------------------------------------------
+@app.route('/doctor-by-email/<email>', methods=['GET'])
+@token_required
+def get_doctor_by_email(current_user, email):
+    try:
+        # Check if the requesting user is the same as the doctor being requested
+        if current_user['email'] != email and current_user['role'] != 'admin':
+            return jsonify({
+                'status': 'fail',
+                'message': 'Unauthorized access'
+            }), 403
+        
+        # Find the doctor in the database
+        doctor = db.doctors.find_one({'email': email})
+        
+        if not doctor:
+            return jsonify({
+                'status': 'fail',
+                'message': 'Doctor not found'
+            }), 404
+        
+        # Convert ObjectId to string for JSON serialization
+        doctor['_id'] = str(doctor['_id'])
+        
+        return jsonify({
+            'status': 'success',
+            'doctor': doctor
         }), 200
         
     except Exception as e:
